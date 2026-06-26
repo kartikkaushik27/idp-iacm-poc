@@ -35,34 +35,34 @@ pipeline:
           execution:
             steps:
               - step:
-                  type: Run
-                  name: Ensure Workspace
-                  identifier: ensure_ws
+                  type: Http
+                  name: Check Workspace
+                  identifier: check_ws
+                  timeout: 1m
                   spec:
-                    shell: Bash
-                    command: |
-                      set -e
-                      ACCOUNT="<+account.identifier>"
-                      ORG="default"
-                      PROJECT="IDP_POC"
-                      WS="<+pipeline.variables.workspace_id>"
-                      API_KEY="<+secrets.getValue('harness_api_key')>"
-                      BASE="https://app.harness.io"
-
-                      HTTP=$(curl -s -o /tmp/ws.json -w "%{http_code}" \
-                        -H "x-api-key: $API_KEY" \
-                        "$BASE/iacm/api/orgs/$ORG/projects/$PROJECT/workspaces/$WS?accountIdentifier=$ACCOUNT")
-
-                      if [ "$HTTP" = "200" ]; then
-                        echo "Workspace $WS already exists - reusing it."
-                        exit 0
-                      fi
-
-                      echo "Creating workspace $WS ..."
-                      cat > /tmp/ws_body.json <<JSON
+                    url: https://app.harness.io/iacm/api/orgs/default/projects/IDP_POC/workspaces/<+pipeline.variables.workspace_id>?accountIdentifier=<+account.identifier>
+                    method: GET
+                    headers:
+                      - key: x-api-key
+                        value: <+secrets.getValue("harness_api_key")>
+                    # No assertion: a 404 (workspace missing) must NOT fail the step.
+              - step:
+                  type: Http
+                  name: Create Workspace
+                  identifier: create_ws
+                  timeout: 2m
+                  spec:
+                    url: https://app.harness.io/iacm/api/orgs/default/projects/IDP_POC/workspaces?accountIdentifier=<+account.identifier>
+                    method: POST
+                    headers:
+                      - key: x-api-key
+                        value: <+secrets.getValue("harness_api_key")>
+                      - key: Content-Type
+                        value: application/json
+                    requestBody: |-
                       {
-                        "identifier": "$WS",
-                        "name": "$WS",
+                        "identifier": "<+pipeline.variables.workspace_id>",
+                        "name": "<+pipeline.variables.workspace_id>",
                         "provisioner": "terraform",
                         "provisioner_version": "1.5.7",
                         "provider_connector": "aws_connector",
@@ -77,22 +77,11 @@ pipeline:
                           "owner_name": {"key": "owner_name", "value": "<+pipeline.variables.requester_name>", "value_type": "string"}
                         }
                       }
-                      JSON
-
-                      curl -s -f -X POST \
-                        -H "x-api-key: $API_KEY" \
-                        -H "Content-Type: application/json" \
-                        "$BASE/iacm/api/orgs/$ORG/projects/$PROJECT/workspaces?accountIdentifier=$ACCOUNT" \
-                        -d @/tmp/ws_body.json
-                      echo ""
-                      echo "Workspace $WS created."
-                  timeout: 10m
-          platform:
-            os: Linux
-            arch: Amd64
-          runtime:
-            type: Cloud
-            spec: {}
+                    assertion: <+httpResponseCode> == 200 || <+httpResponseCode> == 201
+                  when:
+                    stageStatus: Success
+                    # Only create when the workspace does not already exist (reuse on return).
+                    condition: <+pipeline.stages.bootstrap.spec.execution.steps.check_ws.output.httpResponseCode> != 200
         tags: {}
     - stage:
         name: Provision
@@ -134,29 +123,20 @@ pipeline:
     - stage:
         name: Summary
         identifier: summary
-        description: Print provisioned resource details
+        description: Fetch final workspace status (native HTTP, no shell)
         type: Custom
         spec:
           execution:
             steps:
               - step:
-                  type: Run
+                  type: Http
                   name: Summary
                   identifier: print_summary
+                  timeout: 2m
                   spec:
-                    shell: Bash
-                    command: |
-                      echo "Requester : <+pipeline.variables.requester_email>"
-                      echo "Workspace : <+pipeline.variables.workspace_id>"
-                      echo "Type      : <+pipeline.variables.resource_type>"
-                      echo "EC2 id    : <+pipeline.stages.provision.spec.execution.steps.apply.output.outputVariables.id>"
-                      echo "EC2 IP    : <+pipeline.stages.provision.spec.execution.steps.apply.output.outputVariables.public_ip>"
-                      echo "S3 bucket : <+pipeline.stages.provision.spec.execution.steps.apply.output.outputVariables.bucket_name>"
-                  timeout: 10m
-          platform:
-            os: Linux
-            arch: Amd64
-          runtime:
-            type: Cloud
-            spec: {}
+                    url: https://app.harness.io/iacm/api/orgs/default/projects/IDP_POC/workspaces/<+pipeline.variables.workspace_id>?accountIdentifier=<+account.identifier>
+                    method: GET
+                    headers:
+                      - key: x-api-key
+                        value: <+secrets.getValue("harness_api_key")>
         tags: {}
