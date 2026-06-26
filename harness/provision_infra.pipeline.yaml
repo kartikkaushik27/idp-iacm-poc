@@ -209,57 +209,74 @@ pipeline:
                       OWNER_NAME: <+pipeline.variables.requester_name>
                     command: |-
                       # Non-blocking: never fail provisioning because of catalog upkeep.
-                      set -u
-                      BASE="https://app.harness.io/v1/entities"
-                      ID="${WORKSPACE_ID}"
-                      ACCT="${ACCOUNT_ID}"
+                      # Implemented in python3 (stdlib only) to avoid jq/tooling assumptions.
+                      python3 - <<'PY' || echo "Catalog step skipped (python3 unavailable or error) - non-blocking"
+                      import os, sys, json, urllib.request, urllib.error, urllib.parse
 
-                      FORMDATA=$(printf '{"email":"%s","name":"%s","createEc2":%s,"createS3":%s}' "${OWNER_EMAIL}" "${OWNER_NAME}" "${CREATE_EC2}" "${CREATE_S3}")
-                      ENC=$(printf '%s' "${FORMDATA}" | jq -sRr @uri)
-                      MANAGE_URL="https://app.harness.io/ng/account/${ACCT}/module/idp/create/templates/default/order_infrastructure?formData=${ENC}"
-                      WS_URL="https://app.harness.io/ng/account/${ACCT}/module/iacm/orgs/default/projects/IDP_POC/workspaces/${ID}"
+                      acct  = os.environ["ACCOUNT_ID"]
+                      api   = os.environ["HARNESS_API_KEY"]
+                      wid   = os.environ["WORKSPACE_ID"]
+                      email = os.environ.get("OWNER_EMAIL", "")
+                      name  = os.environ.get("OWNER_NAME", "")
+                      ec2   = os.environ.get("CREATE_EC2", "false").strip().lower() == "true"
+                      s3    = os.environ.get("CREATE_S3", "false").strip().lower() == "true"
 
-                      {
-                        echo "apiVersion: harness.io/v1"
-                        echo "kind: Component"
-                        echo "identifier: ${ID}"
-                        echo "name: ${ID}"
-                        echo "orgIdentifier: default"
-                        echo "projectIdentifier: IDP_POC"
-                        echo "type: infrastructure"
-                        echo "owner: group:account/platform_team"
-                        echo "spec:"
-                        echo "  lifecycle: production"
-                        echo "metadata:"
-                        echo "  description: AWS infra managed via IDP for ${OWNER_EMAIL}"
-                        echo "  links:"
-                        echo "    - title: Manage / Edit Resources"
-                        echo "      url: ${MANAGE_URL}"
-                        echo "    - title: IaCM Workspace"
-                        echo "      url: ${WS_URL}"
-                        echo "  annotations:"
-                        echo "    idp-iacm/owner-email: \"${OWNER_EMAIL}\""
-                        echo "    idp-iacm/ec2: \"${CREATE_EC2}\""
-                        echo "    idp-iacm/s3: \"${CREATE_S3}\""
-                        echo "  tags:"
-                        echo "    - idp-iacm-infra"
-                        [ "${CREATE_EC2}" = "true" ] && echo "    - ec2"
-                        [ "${CREATE_S3}" = "true" ] && echo "    - s3"
-                      } > /tmp/entity.yaml
+                      form = {"email": email, "name": name, "createEc2": ec2, "createS3": s3}
+                      enc  = urllib.parse.quote(json.dumps(form))
+                      manage_url = "https://app.harness.io/ng/account/%s/module/idp/create/templates/default/order_infrastructure?formData=%s" % (acct, enc)
+                      ws_url     = "https://app.harness.io/ng/account/%s/module/iacm/orgs/default/projects/IDP_POC/workspaces/%s" % (acct, wid)
 
-                      echo "----- catalog entity yaml -----"
-                      cat /tmp/entity.yaml
-                      jq -Rs '{yaml: .}' /tmp/entity.yaml > /tmp/entity_body.json
+                      tags = ["idp-iacm-infra"]
+                      if ec2: tags.append("ec2")
+                      if s3:  tags.append("s3")
+                      tag_lines = "".join("\n    - %s" % t for t in tags)
 
-                      ecode=$(curl -s -o /tmp/entity_resp.json -w "%{http_code}" -X PUT \
-                        -H "x-api-key: ${HARNESS_API_KEY}" \
-                        -H "Harness-Account: ${ACCT}" \
-                        -H "Content-Type: application/json" \
-                        "${BASE}/account.default.IDP_POC/component/${ID}?orgIdentifier=default&projectIdentifier=IDP_POC" \
-                        -d @/tmp/entity_body.json)
-                      echo "Catalog upsert (PUT) status: ${ecode}"
-                      cat /tmp/entity_resp.json || true
-                      echo ""
-                      echo "Catalog registration step complete (non-blocking)."
-                      exit 0
+                      entity_yaml = (
+                          "apiVersion: harness.io/v1\n"
+                          "kind: Component\n"
+                          "identifier: %s\n" % wid +
+                          "name: %s\n" % wid +
+                          "orgIdentifier: default\n"
+                          "projectIdentifier: IDP_POC\n"
+                          "type: infrastructure\n"
+                          "owner: group:account/platform_team\n"
+                          "spec:\n"
+                          "  lifecycle: production\n"
+                          "metadata:\n"
+                          "  description: AWS infra managed via IDP for %s\n" % email +
+                          "  links:\n"
+                          "    - title: Manage / Edit Resources\n"
+                          "      url: %s\n" % manage_url +
+                          "    - title: IaCM Workspace\n"
+                          "      url: %s\n" % ws_url +
+                          "  annotations:\n"
+                          "    idp-iacm/owner-email: \"%s\"\n" % email +
+                          "    idp-iacm/ec2: \"%s\"\n" % str(ec2).lower() +
+                          "    idp-iacm/s3: \"%s\"\n" % str(s3).lower() +
+                          "  tags:%s\n" % tag_lines
+                      )
+
+                      print("----- catalog entity yaml -----")
+                      print(entity_yaml)
+
+                      body = json.dumps({"yaml": entity_yaml}).encode("utf-8")
+                      url = ("https://app.harness.io/v1/entities/account.default.IDP_POC/component/%s"
+                             "?orgIdentifier=default&projectIdentifier=IDP_POC" % wid)
+                      req = urllib.request.Request(url, data=body, method="PUT", headers={
+                          "x-api-key": api,
+                          "Harness-Account": acct,
+                          "Content-Type": "application/json",
+                      })
+                      try:
+                          with urllib.request.urlopen(req) as r:
+                              print("Catalog upsert (PUT) status:", r.status)
+                              print(r.read().decode("utf-8"))
+                      except urllib.error.HTTPError as e:
+                          print("Catalog upsert HTTPError:", e.code)
+                          print(e.read().decode("utf-8"))
+                      except Exception as e:
+                          print("Catalog upsert error:", repr(e))
+                      print("Catalog registration step complete (non-blocking).")
+                      sys.exit(0)
+                      PY
         tags: {}
