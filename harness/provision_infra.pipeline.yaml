@@ -91,8 +91,8 @@ pipeline:
                       echo "GET workspace status: ${code}"
 
                       if [ "${code}" = "200" ]; then
-                        echo "Workspace ${WORKSPACE_ID} exists - updating (PATCH) to keep vars/session token current..."
-                        rcode=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X PATCH \
+                        echo "Workspace ${WORKSPACE_ID} exists - updating (PUT) to keep vars/session token current..."
+                        rcode=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X PUT \
                           -H "x-api-key: ${HARNESS_API_KEY}" \
                           -H "Content-Type: application/json" \
                           "${BASE}/${WORKSPACE_ID}?accountIdentifier=${ACCOUNT_ID}" \
