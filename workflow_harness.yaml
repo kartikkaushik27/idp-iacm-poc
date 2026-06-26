@@ -47,8 +47,8 @@ spec:
         workspace_id: ${{ parameters.email | replace("@", "_") | replace(".", "_") }}_infra
         requester_email: ${{ parameters.email }}
         requester_name: ${{ parameters.name }}
-        create_ec2: ${{ parameters.createEc2 }}
-        create_s3: ${{ parameters.createS3 }}
+        create_ec2: "${{ parameters.createEc2 }}"
+        create_s3: "${{ parameters.createS3 }}"
       apikey: ${{ parameters.token }}
 metadata:
   description: Manage your AWS infrastructure (EC2 and/or S3) in a single per-user IaCM workspace
