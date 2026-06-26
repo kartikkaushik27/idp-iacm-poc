@@ -192,4 +192,74 @@ pipeline:
                       curl -s -H "x-api-key: ${HARNESS_API_KEY}" \
                         "${BASE}/${WORKSPACE_ID}?accountIdentifier=${ACCOUNT_ID}"
                       echo ""
+              - step:
+                  type: Run
+                  name: Register Catalog Entity
+                  identifier: register_catalog
+                  timeout: 3m
+                  spec:
+                    shell: Sh
+                    envVariables:
+                      HARNESS_API_KEY: <+secrets.getValue("harness_api_key")>
+                      ACCOUNT_ID: <+account.identifier>
+                      WORKSPACE_ID: <+pipeline.variables.workspace_id>
+                      CREATE_EC2: <+pipeline.variables.create_ec2>
+                      CREATE_S3: <+pipeline.variables.create_s3>
+                      OWNER_EMAIL: <+pipeline.variables.requester_email>
+                      OWNER_NAME: <+pipeline.variables.requester_name>
+                    command: |-
+                      # Non-blocking: never fail provisioning because of catalog upkeep.
+                      set -u
+                      BASE="https://app.harness.io/v1/entities"
+                      ID="${WORKSPACE_ID}"
+                      ACCT="${ACCOUNT_ID}"
+
+                      FORMDATA=$(printf '{"email":"%s","name":"%s","createEc2":%s,"createS3":%s}' "${OWNER_EMAIL}" "${OWNER_NAME}" "${CREATE_EC2}" "${CREATE_S3}")
+                      ENC=$(printf '%s' "${FORMDATA}" | jq -sRr @uri)
+                      MANAGE_URL="https://app.harness.io/ng/account/${ACCT}/module/idp/create/templates/default/order_infrastructure?formData=${ENC}"
+                      WS_URL="https://app.harness.io/ng/account/${ACCT}/module/iacm/orgs/default/projects/IDP_POC/workspaces/${ID}"
+
+                      {
+                        echo "apiVersion: harness.io/v1"
+                        echo "kind: Component"
+                        echo "identifier: ${ID}"
+                        echo "name: ${ID}"
+                        echo "orgIdentifier: default"
+                        echo "projectIdentifier: IDP_POC"
+                        echo "type: infrastructure"
+                        echo "owner: group:account/platform_team"
+                        echo "spec:"
+                        echo "  lifecycle: production"
+                        echo "metadata:"
+                        echo "  description: AWS infra managed via IDP for ${OWNER_EMAIL}"
+                        echo "  links:"
+                        echo "    - title: Manage / Edit Resources"
+                        echo "      url: ${MANAGE_URL}"
+                        echo "    - title: IaCM Workspace"
+                        echo "      url: ${WS_URL}"
+                        echo "  annotations:"
+                        echo "    idp-iacm/owner-email: \"${OWNER_EMAIL}\""
+                        echo "    idp-iacm/ec2: \"${CREATE_EC2}\""
+                        echo "    idp-iacm/s3: \"${CREATE_S3}\""
+                        echo "  tags:"
+                        echo "    - idp-iacm-infra"
+                        [ "${CREATE_EC2}" = "true" ] && echo "    - ec2"
+                        [ "${CREATE_S3}" = "true" ] && echo "    - s3"
+                      } > /tmp/entity.yaml
+
+                      echo "----- catalog entity yaml -----"
+                      cat /tmp/entity.yaml
+                      jq -Rs '{yaml: .}' /tmp/entity.yaml > /tmp/entity_body.json
+
+                      ecode=$(curl -s -o /tmp/entity_resp.json -w "%{http_code}" -X PUT \
+                        -H "x-api-key: ${HARNESS_API_KEY}" \
+                        -H "Harness-Account: ${ACCT}" \
+                        -H "Content-Type: application/json" \
+                        "${BASE}/account.default.IDP_POC/component/${ID}?orgIdentifier=default&projectIdentifier=IDP_POC" \
+                        -d @/tmp/entity_body.json)
+                      echo "Catalog upsert (PUT) status: ${ecode}"
+                      cat /tmp/entity_resp.json || true
+                      echo ""
+                      echo "Catalog registration step complete (non-blocking)."
+                      exit 0
         tags: {}
