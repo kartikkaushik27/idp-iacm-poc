@@ -208,9 +208,8 @@ pipeline:
                       OWNER_EMAIL: <+pipeline.variables.requester_email>
                       OWNER_NAME: <+pipeline.variables.requester_name>
                     command: |-
-                      # Non-blocking: never fail provisioning because of catalog upkeep.
-                      # Implemented in python3 (stdlib only) to avoid jq/tooling assumptions.
-                      python3 - <<'PY' || echo "Catalog step skipped (python3 unavailable or error) - non-blocking"
+                      # Non-blocking: catalog upkeep must never fail provisioning.
+                      python3 - <<'PY' || echo "Catalog step skipped (python3 unavailable) - non-blocking"
                       import os, sys, json, urllib.request, urllib.error, urllib.parse
 
                       acct  = os.environ["ACCOUNT_ID"]
@@ -260,23 +259,37 @@ pipeline:
                       print(entity_yaml)
 
                       body = json.dumps({"yaml": entity_yaml}).encode("utf-8")
-                      url = ("https://app.harness.io/v1/entities/account.default.IDP_POC/component/%s"
-                             "?orgIdentifier=default&projectIdentifier=IDP_POC" % wid)
-                      req = urllib.request.Request(url, data=body, method="PUT", headers={
-                          "x-api-key": api,
-                          "Harness-Account": acct,
-                          "Content-Type": "application/json",
-                      })
-                      try:
-                          with urllib.request.urlopen(req) as r:
-                              print("Catalog upsert (PUT) status:", r.status)
-                              print(r.read().decode("utf-8"))
-                      except urllib.error.HTTPError as e:
-                          print("Catalog upsert HTTPError:", e.code)
-                          print(e.read().decode("utf-8"))
-                      except Exception as e:
-                          print("Catalog upsert error:", repr(e))
-                      print("Catalog registration step complete (non-blocking).")
+                      headers = {"x-api-key": api, "Harness-Account": acct, "Content-Type": "application/json"}
+
+                      def send(method, url):
+                          req = urllib.request.Request(url, data=body, method=method, headers=headers)
+                          try:
+                              with urllib.request.urlopen(req) as r:
+                                  return r.status, r.read().decode("utf-8")
+                          except urllib.error.HTTPError as e:
+                              return e.code, e.read().decode("utf-8")
+                          except Exception as e:
+                              return 0, repr(e)
+
+                      create_url = "https://app.harness.io/v1/entities?orgIdentifier=default&projectIdentifier=IDP_POC"
+                      update_url = ("https://app.harness.io/v1/entities/account.default.IDP_POC/component/%s"
+                                    "?orgIdentifier=default&projectIdentifier=IDP_POC" % wid)
+
+                      # Create-or-update: POST creates the project-scoped component; if it already
+                      # exists, fall back to PUT to refresh tags/links/annotations.
+                      code, resp = send("POST", create_url)
+                      print("POST create status:", code)
+                      print(resp)
+                      if code not in (200, 201):
+                          print("Component likely exists - updating via PUT...")
+                          code, resp = send("PUT", update_url)
+                          print("PUT update status:", code)
+                          print(resp)
+
+                      if code in (200, 201):
+                          print("Catalog entity upserted OK.")
+                      else:
+                          print("Catalog upsert failed (non-blocking) - provisioning unaffected.")
                       sys.exit(0)
                       PY
         tags: {}
