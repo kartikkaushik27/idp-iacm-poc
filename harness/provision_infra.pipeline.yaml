@@ -59,17 +59,9 @@ pipeline:
                       set -eu
                       BASE="https://app.harness.io/iacm/api/orgs/default/projects/IDP_POC/workspaces"
 
-                      code=$(curl -s -o /tmp/ws.json -w "%{http_code}" \
-                        -H "x-api-key: ${HARNESS_API_KEY}" \
-                        "${BASE}/${WORKSPACE_ID}?accountIdentifier=${ACCOUNT_ID}")
-                      echo "GET workspace status: ${code}"
-
-                      if [ "${code}" = "200" ]; then
-                        echo "Workspace ${WORKSPACE_ID} already exists - reusing."
-                        exit 0
-                      fi
-
-                      echo "Creating workspace ${WORKSPACE_ID}..."
+                      # Shared workspace body. AWS_SESSION_TOKEN is injected as a secret env var
+                      # because the requester uses STS temporary credentials (the AWS connector
+                      # only supplies the access key + secret, not the session token).
                       cat > /tmp/body.json <<JSON
                       {
                         "identifier": "${WORKSPACE_ID}",
@@ -82,6 +74,9 @@ pipeline:
                         "repository_branch": "main",
                         "repository_path": ".",
                         "cost_estimation_enabled": false,
+                        "environment_variables": {
+                          "AWS_SESSION_TOKEN": {"key": "AWS_SESSION_TOKEN", "value": "AWS_SESSION_TOKEN", "value_type": "secret"}
+                        },
                         "terraform_variables": {
                           "resource_type": {"key": "resource_type", "value": "${RESOURCE_TYPE}", "value_type": "string"},
                           "owner_email": {"key": "owner_email", "value": "${OWNER_EMAIL}", "value_type": "string"},
@@ -90,20 +85,35 @@ pipeline:
                       }
                       JSON
 
-                      ccode=$(curl -s -o /tmp/create.json -w "%{http_code}" -X POST \
+                      code=$(curl -s -o /tmp/ws.json -w "%{http_code}" \
                         -H "x-api-key: ${HARNESS_API_KEY}" \
-                        -H "Content-Type: application/json" \
-                        "${BASE}?accountIdentifier=${ACCOUNT_ID}" \
-                        -d @/tmp/body.json)
-                      echo "CREATE workspace status: ${ccode}"
-                      cat /tmp/create.json || true
+                        "${BASE}/${WORKSPACE_ID}?accountIdentifier=${ACCOUNT_ID}")
+                      echo "GET workspace status: ${code}"
+
+                      if [ "${code}" = "200" ]; then
+                        echo "Workspace ${WORKSPACE_ID} exists - updating (PATCH) to keep vars/session token current..."
+                        rcode=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X PATCH \
+                          -H "x-api-key: ${HARNESS_API_KEY}" \
+                          -H "Content-Type: application/json" \
+                          "${BASE}/${WORKSPACE_ID}?accountIdentifier=${ACCOUNT_ID}" \
+                          -d @/tmp/body.json)
+                      else
+                        echo "Creating workspace ${WORKSPACE_ID}..."
+                        rcode=$(curl -s -o /tmp/resp.json -w "%{http_code}" -X POST \
+                          -H "x-api-key: ${HARNESS_API_KEY}" \
+                          -H "Content-Type: application/json" \
+                          "${BASE}?accountIdentifier=${ACCOUNT_ID}" \
+                          -d @/tmp/body.json)
+                      fi
+                      echo "Write workspace status: ${rcode}"
+                      cat /tmp/resp.json || true
                       echo ""
 
-                      if [ "${ccode}" != "200" ] && [ "${ccode}" != "201" ]; then
-                        echo "Workspace creation failed (HTTP ${ccode})"
+                      if [ "${rcode}" != "200" ] && [ "${rcode}" != "201" ]; then
+                        echo "Workspace write failed (HTTP ${rcode})"
                         exit 1
                       fi
-                      echo "Workspace ${WORKSPACE_ID} created."
+                      echo "Workspace ${WORKSPACE_ID} ready."
         tags: {}
     - stage:
         name: Provision
