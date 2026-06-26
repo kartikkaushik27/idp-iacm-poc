@@ -1,0 +1,162 @@
+pipeline:
+  name: IDP IaCM Provision
+  identifier: provision_infra
+  projectIdentifier: IDP_POC
+  orgIdentifier: default
+  tags: {}
+  variables:
+    - name: workspace_id
+      type: String
+      description: Deterministic per-requester workspace id, supplied by IDP
+      required: true
+      value: <+input>
+    - name: requester_email
+      type: String
+      description: Email of the requesting developer
+      required: true
+      value: <+input>
+    - name: requester_name
+      type: String
+      description: Display name of the requester
+      required: false
+      value: <+input>
+    - name: resource_type
+      type: String
+      description: ec2 or s3
+      required: true
+      value: <+input>
+  stages:
+    - stage:
+        name: Bootstrap Workspace
+        identifier: bootstrap
+        description: Create the requester's IaCM workspace if it does not already exist
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Ensure Workspace
+                  identifier: ensure_ws
+                  spec:
+                    shell: Bash
+                    command: |
+                      set -e
+                      ACCOUNT="<+account.identifier>"
+                      ORG="default"
+                      PROJECT="IDP_POC"
+                      WS="<+pipeline.variables.workspace_id>"
+                      API_KEY="<+secrets.getValue('harness_api_key')>"
+                      BASE="https://app.harness.io"
+
+                      HTTP=$(curl -s -o /tmp/ws.json -w "%{http_code}" \
+                        -H "x-api-key: $API_KEY" \
+                        "$BASE/iacm/api/orgs/$ORG/projects/$PROJECT/workspaces/$WS?accountIdentifier=$ACCOUNT")
+
+                      if [ "$HTTP" = "200" ]; then
+                        echo "Workspace $WS already exists - reusing it."
+                        exit 0
+                      fi
+
+                      echo "Creating workspace $WS ..."
+                      cat > /tmp/ws_body.json <<JSON
+                      {
+                        "identifier": "$WS",
+                        "name": "$WS",
+                        "provisioner": "terraform",
+                        "provisioner_version": "1.5.7",
+                        "provider_connector": "aws_connector",
+                        "repository_connector": "github_connector",
+                        "repository": "idp-iacm-poc",
+                        "repository_branch": "main",
+                        "repository_path": ".",
+                        "cost_estimation_enabled": false,
+                        "terraform_variables": {
+                          "resource_type": {"key": "resource_type", "value": "<+pipeline.variables.resource_type>", "value_type": "string"},
+                          "owner_email": {"key": "owner_email", "value": "<+pipeline.variables.requester_email>", "value_type": "string"},
+                          "owner_name": {"key": "owner_name", "value": "<+pipeline.variables.requester_name>", "value_type": "string"}
+                        }
+                      }
+                      JSON
+
+                      curl -s -f -X POST \
+                        -H "x-api-key: $API_KEY" \
+                        -H "Content-Type: application/json" \
+                        "$BASE/iacm/api/orgs/$ORG/projects/$PROJECT/workspaces?accountIdentifier=$ACCOUNT" \
+                        -d @/tmp/ws_body.json
+                      echo ""
+                      echo "Workspace $WS created."
+                  timeout: 10m
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+        tags: {}
+    - stage:
+        name: Provision
+        identifier: provision
+        description: Run Terraform init/plan/apply against the workspace
+        type: IACM
+        spec:
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          workspace: <+pipeline.variables.workspace_id>
+          execution:
+            steps:
+              - step:
+                  type: IACMTerraformPlugin
+                  name: init
+                  identifier: init
+                  timeout: 10m
+                  spec:
+                    command: init
+              - step:
+                  type: IACMTerraformPlugin
+                  name: plan
+                  identifier: plan
+                  timeout: 10m
+                  spec:
+                    command: plan
+              - step:
+                  type: IACMTerraformPlugin
+                  name: apply
+                  identifier: apply
+                  timeout: 30m
+                  spec:
+                    command: apply
+        tags: {}
+    - stage:
+        name: Summary
+        identifier: summary
+        description: Print provisioned resource details
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Summary
+                  identifier: print_summary
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Requester : <+pipeline.variables.requester_email>"
+                      echo "Workspace : <+pipeline.variables.workspace_id>"
+                      echo "Type      : <+pipeline.variables.resource_type>"
+                      echo "EC2 id    : <+pipeline.stages.provision.spec.execution.steps.apply.output.outputVariables.id>"
+                      echo "EC2 IP    : <+pipeline.stages.provision.spec.execution.steps.apply.output.outputVariables.public_ip>"
+                      echo "S3 bucket : <+pipeline.stages.provision.spec.execution.steps.apply.output.outputVariables.bucket_name>"
+                  timeout: 10m
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+        tags: {}
