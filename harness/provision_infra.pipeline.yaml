@@ -29,40 +29,51 @@ pipeline:
     - stage:
         name: Bootstrap Workspace
         identifier: bootstrap
-        description: Create the requester's IaCM workspace if it does not already exist
-        type: Custom
+        description: Create the requester's IaCM workspace if it does not already exist (create-or-reuse). Runs on Harness Cloud, no delegate.
+        type: CI
         spec:
+          cloneCodebase: false
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
           execution:
             steps:
               - step:
-                  type: Http
-                  name: Check Workspace
-                  identifier: check_ws
-                  timeout: 1m
+                  type: Run
+                  name: Ensure Workspace
+                  identifier: ensure_ws
+                  timeout: 5m
                   spec:
-                    url: https://app.harness.io/iacm/api/orgs/default/projects/IDP_POC/workspaces/<+pipeline.variables.workspace_id>?accountIdentifier=<+account.identifier>
-                    method: GET
-                    headers:
-                      - key: x-api-key
-                        value: <+secrets.getValue("harness_api_key")>
-                    # No assertion: a 404 (workspace missing) must NOT fail the step.
-              - step:
-                  type: Http
-                  name: Create Workspace
-                  identifier: create_ws
-                  timeout: 2m
-                  spec:
-                    url: https://app.harness.io/iacm/api/orgs/default/projects/IDP_POC/workspaces?accountIdentifier=<+account.identifier>
-                    method: POST
-                    headers:
-                      - key: x-api-key
-                        value: <+secrets.getValue("harness_api_key")>
-                      - key: Content-Type
-                        value: application/json
-                    requestBody: |-
+                    shell: Sh
+                    envVariables:
+                      HARNESS_API_KEY: <+secrets.getValue("harness_api_key")>
+                      ACCOUNT_ID: <+account.identifier>
+                      WORKSPACE_ID: <+pipeline.variables.workspace_id>
+                      RESOURCE_TYPE: <+pipeline.variables.resource_type>
+                      OWNER_EMAIL: <+pipeline.variables.requester_email>
+                      OWNER_NAME: <+pipeline.variables.requester_name>
+                    command: |-
+                      set -eu
+                      BASE="https://app.harness.io/iacm/api/orgs/default/projects/IDP_POC/workspaces"
+
+                      code=$(curl -s -o /tmp/ws.json -w "%{http_code}" \
+                        -H "x-api-key: ${HARNESS_API_KEY}" \
+                        "${BASE}/${WORKSPACE_ID}?accountIdentifier=${ACCOUNT_ID}")
+                      echo "GET workspace status: ${code}"
+
+                      if [ "${code}" = "200" ]; then
+                        echo "Workspace ${WORKSPACE_ID} already exists - reusing."
+                        exit 0
+                      fi
+
+                      echo "Creating workspace ${WORKSPACE_ID}..."
+                      cat > /tmp/body.json <<JSON
                       {
-                        "identifier": "<+pipeline.variables.workspace_id>",
-                        "name": "<+pipeline.variables.workspace_id>",
+                        "identifier": "${WORKSPACE_ID}",
+                        "name": "${WORKSPACE_ID}",
                         "provisioner": "terraform",
                         "provisioner_version": "1.5.7",
                         "provider_connector": "aws_connector",
@@ -72,16 +83,27 @@ pipeline:
                         "repository_path": ".",
                         "cost_estimation_enabled": false,
                         "terraform_variables": {
-                          "resource_type": {"key": "resource_type", "value": "<+pipeline.variables.resource_type>", "value_type": "string"},
-                          "owner_email": {"key": "owner_email", "value": "<+pipeline.variables.requester_email>", "value_type": "string"},
-                          "owner_name": {"key": "owner_name", "value": "<+pipeline.variables.requester_name>", "value_type": "string"}
+                          "resource_type": {"key": "resource_type", "value": "${RESOURCE_TYPE}", "value_type": "string"},
+                          "owner_email": {"key": "owner_email", "value": "${OWNER_EMAIL}", "value_type": "string"},
+                          "owner_name": {"key": "owner_name", "value": "${OWNER_NAME}", "value_type": "string"}
                         }
                       }
-                    assertion: <+httpResponseCode> == 200 || <+httpResponseCode> == 201
-                  when:
-                    stageStatus: Success
-                    # Only create when the workspace does not already exist (reuse on return).
-                    condition: <+pipeline.stages.bootstrap.spec.execution.steps.check_ws.output.httpResponseCode> != 200
+                      JSON
+
+                      ccode=$(curl -s -o /tmp/create.json -w "%{http_code}" -X POST \
+                        -H "x-api-key: ${HARNESS_API_KEY}" \
+                        -H "Content-Type: application/json" \
+                        "${BASE}?accountIdentifier=${ACCOUNT_ID}" \
+                        -d @/tmp/body.json)
+                      echo "CREATE workspace status: ${ccode}"
+                      cat /tmp/create.json || true
+                      echo ""
+
+                      if [ "${ccode}" != "200" ] && [ "${ccode}" != "201" ]; then
+                        echo "Workspace creation failed (HTTP ${ccode})"
+                        exit 1
+                      fi
+                      echo "Workspace ${WORKSPACE_ID} created."
         tags: {}
     - stage:
         name: Provision
@@ -123,20 +145,34 @@ pipeline:
     - stage:
         name: Summary
         identifier: summary
-        description: Fetch final workspace status (native HTTP, no shell)
-        type: Custom
+        description: Fetch final workspace status. Runs on Harness Cloud, no delegate.
+        type: CI
         spec:
+          cloneCodebase: false
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
           execution:
             steps:
               - step:
-                  type: Http
-                  name: Summary
+                  type: Run
+                  name: Workspace Status
                   identifier: print_summary
                   timeout: 2m
                   spec:
-                    url: https://app.harness.io/iacm/api/orgs/default/projects/IDP_POC/workspaces/<+pipeline.variables.workspace_id>?accountIdentifier=<+account.identifier>
-                    method: GET
-                    headers:
-                      - key: x-api-key
-                        value: <+secrets.getValue("harness_api_key")>
+                    shell: Sh
+                    envVariables:
+                      HARNESS_API_KEY: <+secrets.getValue("harness_api_key")>
+                      ACCOUNT_ID: <+account.identifier>
+                      WORKSPACE_ID: <+pipeline.variables.workspace_id>
+                    command: |-
+                      set -eu
+                      BASE="https://app.harness.io/iacm/api/orgs/default/projects/IDP_POC/workspaces"
+                      echo "Final status for workspace ${WORKSPACE_ID}:"
+                      curl -s -H "x-api-key: ${HARNESS_API_KEY}" \
+                        "${BASE}/${WORKSPACE_ID}?accountIdentifier=${ACCOUNT_ID}"
+                      echo ""
         tags: {}
