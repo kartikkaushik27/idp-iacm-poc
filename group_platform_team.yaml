@@ -1,0 +1,10 @@
+apiVersion: harness.io/v1
+kind: Group
+type: team
+identifier: platform_team
+name: Platform Team
+spec:
+  profile:
+    displayName: Platform Team
+metadata:
+  description: Platform engineering team that owns IDP self-service workflows

@@ -1,0 +1,55 @@
+apiVersion: harness.io/v1
+kind: Workflow
+type: environment
+identifier: order_infrastructure
+name: OrderInfrastructure
+owner: platform_team
+spec:
+  output:
+    links:
+    - title: Pipeline Execution
+      url: ${{ steps.trigger.output.PipelineUrl }}
+  parameters:
+  - title: Request Details
+    required:
+    - email
+    - resourceType
+    properties:
+      email:
+        title: Your Email
+        type: string
+        description: Used to tag the resource and to name your dedicated workspace
+      name:
+        title: Your Name
+        type: string
+        description: Display name (used as a tag)
+      resourceType:
+        title: Resource Type
+        type: string
+        enum:
+        - ec2
+        - s3
+        default: ec2
+      token:
+        title: Harness Token
+        type: string
+        ui:widget: password
+        ui:field: HarnessAuthToken
+  steps:
+  - id: trigger
+    name: Provision Infrastructure
+    action: trigger:harness-custom-pipeline
+    input:
+      url: https://app.harness.io/ng/account/aBh2PBI0T1CYMmA6iQFosg/module/idp/orgs/default/projects/IDP_POC/pipelines/provision_infra/pipeline-studio/?storeType=INLINE
+      inputset:
+        workspace_id: ${{ parameters.email | replace("@", "_") | replace(".", "_") }}_${{ parameters.resourceType }}
+        requester_email: ${{ parameters.email }}
+        requester_name: ${{ parameters.name }}
+        resource_type: ${{ parameters.resourceType }}
+      apikey: ${{ parameters.token }}
+metadata:
+  description: Provision an EC2 instance or an S3 bucket via Harness IaCM
+  tags:
+  - aws
+  - iacm
+  - self-service

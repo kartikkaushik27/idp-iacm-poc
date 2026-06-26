@@ -1,11 +1,13 @@
-variable "resource_type" {
-  type        = string
-  description = "Which resource to provision: ec2 or s3"
+variable "create_ec2" {
+  type        = bool
+  description = "Provision an EC2 instance. Set false to remove a previously created instance."
+  default     = false
+}
 
-  validation {
-    condition     = contains(["ec2", "s3"], var.resource_type)
-    error_message = "resource_type must be either 'ec2' or 's3'."
-  }
+variable "create_s3" {
+  type        = bool
+  description = "Provision an S3 bucket. Set false to remove a previously created bucket."
+  default     = false
 }
 
 variable "owner_email" {

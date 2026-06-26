@@ -3,7 +3,7 @@ kind: Template
 metadata:
   name: order-infrastructure
   title: Order Infrastructure
-  description: Provision an EC2 instance or an S3 bucket via Harness IaCM
+  description: Manage your AWS infrastructure (EC2 and/or S3) in a single per-user IaCM workspace
   tags:
     - aws
     - iacm
@@ -15,23 +15,25 @@ spec:
     - title: Request Details
       required:
         - email
-        - resourceType
       properties:
         email:
           title: Your Email
           type: string
-          description: Used to tag the resource and to name your dedicated workspace
+          description: Used to tag resources and to name your dedicated workspace (<email>_infra)
         name:
           title: Your Name
           type: string
           description: Display name (used as a tag)
-        resourceType:
-          title: Resource Type
-          type: string
-          enum:
-            - ec2
-            - s3
-          default: ec2
+        createEc2:
+          title: EC2 Instance
+          type: boolean
+          default: false
+          description: Check to have an EC2 instance. Uncheck and re-run to remove it.
+        createS3:
+          title: S3 Bucket
+          type: boolean
+          default: false
+          description: Check to have an S3 bucket. Uncheck and re-run to remove it.
         token:
           title: Harness Token
           type: string
@@ -44,10 +46,11 @@ spec:
       input:
         url: "https://app.harness.io/ng/account/aBh2PBI0T1CYMmA6iQFosg/module/idp/orgs/default/projects/IDP_POC/pipelines/provision_infra/pipeline-studio/?storeType=INLINE"
         inputset:
-          workspace_id: ${{ parameters.email | replace("@", "_") | replace(".", "_") }}_${{ parameters.resourceType }}
+          workspace_id: ${{ parameters.email | replace("@", "_") | replace(".", "_") }}_infra
           requester_email: ${{ parameters.email }}
           requester_name: ${{ parameters.name }}
-          resource_type: ${{ parameters.resourceType }}
+          create_ec2: ${{ parameters.createEc2 }}
+          create_s3: ${{ parameters.createS3 }}
         apikey: ${{ parameters.token }}
   output:
     links:

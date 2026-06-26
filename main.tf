@@ -1,11 +1,11 @@
-# One root module, two resource types. The resource_type workspace variable
-# selects which module is instantiated. Because each requester+type maps to its
-# own workspace (and therefore its own state), provisioning EC2 never disturbs a
-# previously created S3 bucket for the same user.
+# A single workspace per requester (<email>_infra) holds the full desired state.
+# Each module is gated by a boolean flag, so the apply reconciles to exactly what
+# the requester selected in IDP: checking a box creates the resource, unchecking
+# it on a later run sets count = 0 and Terraform destroys it.
 
 module "ec2" {
   source        = "./modules/ec2"
-  count         = var.resource_type == "ec2" ? 1 : 0
+  count         = var.create_ec2 ? 1 : 0
   owner_email   = var.owner_email
   owner_name    = var.owner_name
   instance_type = var.instance_type
@@ -13,7 +13,7 @@ module "ec2" {
 
 module "s3" {
   source      = "./modules/s3"
-  count       = var.resource_type == "s3" ? 1 : 0
+  count       = var.create_s3 ? 1 : 0
   owner_email = var.owner_email
   owner_name  = var.owner_name
 }

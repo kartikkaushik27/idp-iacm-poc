@@ -7,7 +7,7 @@ pipeline:
   variables:
     - name: workspace_id
       type: String
-      description: Deterministic per-requester workspace id, supplied by IDP
+      description: Per-requester infra workspace id (<email>_infra), supplied by IDP
       required: true
       value: <+input>
     - name: requester_email
@@ -20,9 +20,14 @@ pipeline:
       description: Display name of the requester
       required: false
       value: <+input>
-    - name: resource_type
+    - name: create_ec2
       type: String
-      description: ec2 or s3
+      description: "true to provision an EC2 instance, false to remove it"
+      required: true
+      value: <+input>
+    - name: create_s3
+      type: String
+      description: "true to provision an S3 bucket, false to remove it"
       required: true
       value: <+input>
   stages:
@@ -52,7 +57,8 @@ pipeline:
                       HARNESS_API_KEY: <+secrets.getValue("harness_api_key")>
                       ACCOUNT_ID: <+account.identifier>
                       WORKSPACE_ID: <+pipeline.variables.workspace_id>
-                      RESOURCE_TYPE: <+pipeline.variables.resource_type>
+                      CREATE_EC2: <+pipeline.variables.create_ec2>
+                      CREATE_S3: <+pipeline.variables.create_s3>
                       OWNER_EMAIL: <+pipeline.variables.requester_email>
                       OWNER_NAME: <+pipeline.variables.requester_name>
                     command: |-
@@ -78,7 +84,8 @@ pipeline:
                           "AWS_SESSION_TOKEN": {"key": "AWS_SESSION_TOKEN", "value": "AWS_SESSION_TOKEN", "value_type": "secret"}
                         },
                         "terraform_variables": {
-                          "resource_type": {"key": "resource_type", "value": "${RESOURCE_TYPE}", "value_type": "string"},
+                          "create_ec2": {"key": "create_ec2", "value": "${CREATE_EC2}", "value_type": "string"},
+                          "create_s3": {"key": "create_s3", "value": "${CREATE_S3}", "value_type": "string"},
                           "owner_email": {"key": "owner_email", "value": "${OWNER_EMAIL}", "value_type": "string"},
                           "owner_name": {"key": "owner_name", "value": "${OWNER_NAME}", "value_type": "string"}
                         }
